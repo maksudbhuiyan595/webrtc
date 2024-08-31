@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Rooms Example</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+        }
+        .room-controls {
+            margin-bottom: 20px;
+        }
+        .video-container {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 20px;
+        }
+        video {
+            width: 45%;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .controls {
+            display: flex;
+            justify-content: space-around;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebRTC Rooms Example: Audio, Video, and Screen Sharing</h1>
+    
+    <div class="room-controls">
+        <input type="text" id="roomIdInput" placeholder="Enter room ID">
+        <button id="joinRoomButton">Join Room</button>
+    </div>
+
+    <div class="video-container">
+        <video id="localVideo" autoplay muted></video>
+        <video id="remoteVideo" autoplay></video>
+    </div>
+    
+    <div class="controls">
+        <button id="startVideo">Start Video</button>
+        <button id="startScreenShare">Share Screen</button>
+    </div>
+    
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let localStream;
+        let screenStream;
+        let remoteStream;
+        let peerConnection;
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' }
+            ]
+        };
+
+        const roomIdInput = document.getElementById('roomIdInput');
+        const joinRoomButton = document.getElementById('joinRoomButton');
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const startVideoButton = document.getElementById('startVideo');
+        const startScreenShareButton = document.getElementById('startScreenShare');
+        let roomId = '';
+
+        joinRoomButton.onclick = () => {
+            roomId = roomIdInput.value;
+            if (roomId) {
+                socket.emit('join-room', roomId);
+            }
+        };
+
+        peerConnection = new RTCPeerConnection(configuration);
+
+        peerConnection.onicecandidate = event => {
+            if (event.candidate) {
+                socket.emit('message', { roomId, data: { type: 'candidate', candidate: event.candidate } });
+            }
+        };
+
+        peerConnection.ontrack = event => {
+            if (!remoteStream) {
+                remoteStream = new MediaStream();
+                remoteVideo.srcObject = remoteStream;
+            }
+            remoteStream.addTrack(event.track);
+        };
+
+        startVideoButton.onclick = async () => {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                localVideo.srcObject = localStream;
+
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+                
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                socket.emit('message', { roomId, data: { type: 'offer', offer } });
+            } catch (error) {
+                console.error('Error accessing media devices.', error);
+            }
+        };
+
+        startScreenShareButton.onclick = async () => {
+            try {
+                screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                if(screenStream){
+                    remoteVideo.srcObject = screenStream;
+                }
+                screenStream.getTracks().forEach(track => peerConnection.addTrack(track, screenStream));
+                
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                socket.emit('message', { roomId, data: { type: 'offer', offer } });
+            } catch (error) {
+                console.error('Error accessing screen sharing.', error);
+            }
+        };
+
+        socket.on('message', async message => {
+            switch (message.type) {
+                case 'offer':
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(message.offer));
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    socket.emit('message', { roomId, data: { type: 'answer', answer } });
+                    break;
+                case 'answer':
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(message.answer));
+                    break;
+                case 'candidate':
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
+                    break;
+            }
+        });
+
+        socket.on('user-connected', userId => {
+            console.log(`User connected: ${userId}`);
+        });
+    </script>
+</body>
+</html>
